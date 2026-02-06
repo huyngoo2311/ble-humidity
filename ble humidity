@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Web Bluetooth Humidity Plot (0x181A / 0x2A6F)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .card { border: 1px solid #ddd; border-radius: 14px; padding: 12px 14px; }
+    .big { font-size: 28px; font-weight: 700; }
+    .muted { color: #666; }
+    canvas { width: 100%; height: 280px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 900px; }
+    @media (min-width: 900px){ .grid { grid-template-columns: 1fr 1fr; } }
+    code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h2>Web Bluetooth Humidity Plot</h2>
+  <p class="muted">
+    Connects to Environmental Sensing <code>0x181A</code> → Humidity <code>0x2A6F</code> (uint16, 0.01%RH).
+    Works in <b>Chrome on Android</b>.
+  </p>
+
+  <div class="row">
+    <button id="btnConnect">Connect</button>
+    <button id="btnDisconnect" disabled>Disconnect</button>
+    <button id="btnClear" disabled>Clear Plot</button>
+    <span id="status" class="muted">Idle.</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="muted">Humidity</div>
+      <div class="big"><span id="hum">--</span> <span class="muted">%</span></div>
+      <div class="muted">Last update: <span id="t">--</span></div>
+      <div class="muted">Points kept: <span id="n">0</span></div>
+    </div>
+
+    <div class="card">
+      <div class="muted">Tips</div>
+      <ul>
+        <li>Use <b>Chrome</b> (Android). Web Bluetooth won’t work in most other mobile browsers.</li>
+        <li>Click <b>Connect</b> → pick your device (<code>FDC1004-RH</code>).</li>
+        <li>If you don’t see your device, make sure it’s advertising and Bluetooth is on.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <canvas id="plot"></canvas>
+  </div>
+
+  <script>
+    // ---- UUIDs (standard) ----
+    const ENV_SVC = 0x181A;     // Environmental Sensing
+    const HUM_CHR = 0x2A6F;     // Humidity (uint16, 0.01%RH)
+
+    // ---- UI ----
+    const btnConnect = document.getElementById('btnConnect');
+    const btnDisconnect = document.getElementById('btnDisconnect');
+    const btnClear = document.getElementById('btnClear');
+    const statusEl = document.getElementById('status');
+    const humEl = document.getElementById('hum');
+    const tEl = document.getElementById('t');
+    const nEl = document.getElementById('n');
+
+    // ---- Plot state ----
+    const canvas = document.getElementById('plot');
+    const ctx = canvas.getContext('2d');
+
+    // Keep last N seconds of data
+    const KEEP_SECONDS = 300; // 5 minutes
+    let t0 = null;
+    let data = []; // {t: seconds, y: humidity}
+
+    // BLE handles
+    let device = null;
+    let server = null;
+    let humChar = null;
+
+    function setStatus(s) { statusEl.textContent = s; }
+
+    function nowStr() {
+      const d = new Date();
+      return d.toLocaleTimeString();
+    }
+
+    // Resize canvas for crisp rendering
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.floor(rect.width * dpr);
+      canvas.height = Math.floor(rect.height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawPlot();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // ---- Simple plotting (no libraries) ----
+    function drawPlot() {
+      const w = canvas.getBoundingClientRect().width;
+      const h = canvas.getBoundingClientRect().height;
+
+      // background
+      ctx.clearRect(0, 0, w, h);
+
+      // axes padding
+      const padL = 48, padR = 16, padT = 12, padB = 28;
+      const pw = w - padL - padR;
+      const ph = h - padT - padB;
+
+      // frame
+      ctx.strokeStyle = '#bbb';
+      ctx.strokeRect(padL, padT, pw, ph);
+
+      // no data
+      if (data.length < 2) {
+        ctx.fillStyle = '#666';
+        ctx.fillText('Waiting for notifications...', padL + 10, padT + 20);
+        return;
+      }
+
+      // determine x window: last KEEP_SECONDS
+      const tMax = data[data.length - 1].t;
+      const tMin = Math.max(0, tMax - KEEP_SECONDS);
+
+      // determine y bounds with a little padding
+      let yMin = Infinity, yMax = -Infinity;
+      for (const p of data) {
+        if (p.t < tMin) continue;
+        yMin = Math.min(yMin, p.y);
+        yMax = Math.max(yMax, p.y);
+      }
+      if (!isFinite(yMin) || !isFinite(yMax)) return;
+
+      // pad y range
+      const yPad = Math.max(0.5, (yMax - yMin) * 0.1);
+      yMin -= yPad; yMax += yPad;
+      if (yMax - yMin < 1) { yMin -= 0.5; yMax += 0.5; }
+
+      // helpers
+      const xToPx = (t) => padL + ((t - tMin) / (tMax - tMin)) * pw;
+      const yToPx = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * ph;
+
+      // y ticks
+      ctx.fillStyle = '#666';
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.font = '12px system-ui, sans-serif';
+
+      const yTicks = 4;
+      for (let i = 0; i <= yTicks; i++) {
+        const yy = yMin + (i / yTicks) * (yMax - yMin);
+        const py = yToPx(yy);
+        ctx.strokeRect(padL, py, pw, 0); // gridline (0-height rect trick)
+        ctx.fillText(yy.toFixed(1), 6, py + 4);
+      }
+
+      // x ticks (seconds ago)
+      const xTicks = 5;
+      for (let i = 0; i <= xTicks; i++) {
+        const tt = tMin + (i / xTicks) * (tMax - tMin);
+        const px = xToPx(tt);
+        ctx.strokeRect(px, padT, 0, ph);
+        const ago = Math.round(tMax - tt);
+        ctx.fillText(`${ago}s`, px - 10, padT + ph + 18);
+      }
+
+      // plot line
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      let started = false;
+      for (const p of data) {
+        if (p.t < tMin) continue;
+        const px = xToPx(p.t);
+        const py = yToPx(p.y);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // current point marker
+      const last = data[data.length - 1];
+      if (last.t >= tMin) {
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(xToPx(last.t), yToPx(last.y), 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function pushPoint(y) {
+      if (t0 === null) t0 = performance.now();
+      const t = (performance.now() - t0) / 1000.0;
+      data.push({ t, y });
+
+      // trim old points
+      const cutoff = t - KEEP_SECONDS - 5; // a little buffer
+      while (data.length && data[0].t < cutoff) data.shift();
+
+      nEl.textContent = String(data.length);
+      drawPlot();
+    }
+
+    function clearPlot() {
+      data = [];
+      t0 = null;
+      humEl.textContent = '--';
+      tEl.textContent = '--';
+      nEl.textContent = '0';
+      drawPlot();
+    }
+
+    // ---- BLE decode: uint16 little-endian, units = 0.01%RH ----
+    function parseHumidity(dataView) {
+      // Humidity characteristic 0x2A6F is uint16, 0.01 %RH
+      const raw = dataView.getUint16(0, true); // little-endian
+      return raw / 100.0;
+    }
+
+    async function connect() {
+      if (!navigator.bluetooth) {
+        setStatus('Web Bluetooth not available. Use Chrome on Android.');
+        return;
+      }
+
+      setStatus('Requesting device...');
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [ENV_SVC] }],
+        optionalServices: [ENV_SVC] // keep explicit
+      });
+
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+
+      setStatus('Connecting GATT...');
+      server = await device.gatt.connect();
+
+      setStatus('Getting Environmental Sensing service...');
+      const service = await server.getPrimaryService(ENV_SVC);
+
+      setStatus('Getting Humidity characteristic...');
+      humChar = await service.getCharacteristic(HUM_CHR);
+
+      // Optional: read once
+      try {
+        const v = await humChar.readValue();
+        const h = parseHumidity(v);
+        humEl.textContent = h.toFixed(2);
+        tEl.textContent = nowStr();
+      } catch (e) {
+        // Some stacks might reject read; notify still works.
+      }
+
+      setStatus('Starting notifications...');
+      await humChar.startNotifications();
+      humChar.addEventListener('characteristicvaluechanged', (event) => {
+        const dv = event.target.value;
+        const h = parseHumidity(dv);
+        humEl.textContent = h.toFixed(2);
+        tEl.textContent = nowStr();
+        pushPoint(h);
+      });
+
+      btnConnect.disabled = true;
+      btnDisconnect.disabled = false;
+      btnClear.disabled = false;
+      setStatus(`Connected to ${device.name || 'device'}; receiving notifications.`);
+    }
+
+    function onDisconnected() {
+      setStatus('Disconnected.');
+      btnConnect.disabled = false;
+      btnDisconnect.disabled = true;
+      // keep Clear enabled so you can wipe data without reconnecting
+    }
+
+    async function disconnect() {
+      try {
+        if (humChar) {
+          try { await humChar.stopNotifications(); } catch (_) {}
+          try { humChar.removeEventListener('characteristicvaluechanged', () => {}); } catch (_) {}
+        }
+        if (device && device.gatt && device.gatt.connected) {
+          device.gatt.disconnect();
+        }
+      } finally {
+        device = null; server = null; humChar = null;
+        onDisconnected();
+      }
+    }
+
+    // Wire up UI
+    btnConnect.addEventListener('click', async () => {
+      try {
+        await connect();
+      } catch (err) {
+        console.error(err);
+        setStatus(`Failed: ${err.message || err}`);
+      }
+    });
+
+    btnDisconnect.addEventListener('click', async () => {
+      await disconnect();
+    });
+
+    btnClear.addEventListener('click', () => {
+      clearPlot();
+    });
+
+    // initial draw
+    resizeCanvas();
+  </script>
+</body>
+</html>
