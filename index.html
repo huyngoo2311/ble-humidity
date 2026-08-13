@@ -192,9 +192,6 @@
     const rawValueEl =
       document.getElementById("rawValue");
 
-    const rawBytesEl =
-      document.getElementById("rawBytes");
-
     const timeEl =
       document.getElementById("time");
 
@@ -785,42 +782,26 @@
 
     function processBLEValue(dataView) {
 
-      // Exact received bytes
-      const rawBytes =
-        bytesToHex(dataView);
+  const rawValue =
+    parseRawUint16(dataView);
 
+  rawValueEl.textContent =
+    String(rawValue);
 
-      // uint16 interpretation
-      const rawValue =
-        parseRawUint16(dataView);
+  timeEl.textContent =
+    nowStr();
 
+  // Plot the actual received uint16
+  pushPoint(rawValue);
 
-      // Update UI
-      rawValueEl.textContent =
-        String(rawValue);
-
-      rawBytesEl.textContent =
-        rawBytes;
-
-      timeEl.textContent =
-        nowStr();
-
-
-      // Plot RAW value
-      pushPoint(rawValue);
-
-
-      // Console debugging
-      console.log(
-        "BLE notification:",
-        {
-          time: nowStr(),
-          bytes: rawBytes,
-          uint16: rawValue
-        }
-      );
-
+  console.log(
+    "BLE notification:",
+    {
+      time: nowStr(),
+      uint16: rawValue
     }
+  );
+}
 
 
     // ============================================================
@@ -835,9 +816,6 @@
 
 
       rawValueEl.textContent =
-        "--";
-
-      rawBytesEl.textContent =
         "--";
 
       timeEl.textContent =
@@ -956,10 +934,6 @@
           await humChar.readValue();
 
 
-        const rawBytes =
-          bytesToHex(value);
-
-
         const rawValue =
           parseRawUint16(value);
 
@@ -967,8 +941,7 @@
         rawValueEl.textContent =
           String(rawValue);
 
-        rawBytesEl.textContent =
-          rawBytes;
+       
 
         timeEl.textContent =
           nowStr();
@@ -1041,7 +1014,7 @@
       setStatus(
         `Connected to ${
           device.name || "device"
-        }; receiving raw notifications.`
+        }.`
       );
 
     }
