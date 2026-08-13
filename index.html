@@ -1,308 +1,1221 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Web Bluetooth Humidity Plot (0x181A / 0x2A6F)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Web Bluetooth Raw Humidity Monitor</title>
+
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
-    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .card { border: 1px solid #ddd; border-radius: 14px; padding: 12px 14px; }
-    .big { font-size: 28px; font-weight: 700; }
-    .muted { color: #666; }
-    canvas { width: 100%; height: 280px; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 900px; }
-    @media (min-width: 900px){ .grid { grid-template-columns: 1fr 1fr; } }
-    code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
+    body {
+      font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif;
+
+      margin: 16px;
+      background: #ffffff;
+      color: #111;
+    }
+
+    h2 {
+      margin-bottom: 6px;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+
+    .big {
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .muted {
+      color: #666;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      max-width: 900px;
+    }
+
+    @media (min-width: 900px) {
+      .grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    canvas {
+      width: 100%;
+      height: 300px;
+      display: block;
+    }
+
+    code {
+      background: #f6f6f6;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    #rawBytes {
+      font-family: monospace;
+      word-break: break-all;
+    }
   </style>
 </head>
+
 <body>
-  <h2>Web Bluetooth Humidity Plot</h2>
+
+  <h2>Web Bluetooth Raw Humidity Monitor</h2>
+
   <p class="muted">
-    Connects to Environmental Sensing <code>0x181A</code> → Humidity <code>0x2A6F</code> (uint16, 0.01%RH).
-    Works in <b>Chrome on Android</b>.
+    Environmental Sensing Service
+    <code>0x181A</code>
+    →
+    Humidity Characteristic
+    <code>0x2A6F</code>.
+    Raw BLE data is displayed without conversion to %RH.
   </p>
 
+  <!-- Controls -->
   <div class="row">
-    <button id="btnConnect">Connect</button>
-    <button id="btnDisconnect" disabled>Disconnect</button>
-    <button id="btnClear" disabled>Clear Plot</button>
-    <span id="status" class="muted">Idle.</span>
+
+    <button id="btnConnect">
+      Connect
+    </button>
+
+    <button id="btnDisconnect" disabled>
+      Disconnect
+    </button>
+
+    <button id="btnClear" disabled>
+      Clear Plot
+    </button>
+
+    <span id="status" class="muted">
+      Idle.
+    </span>
+
   </div>
 
+
+  <!-- Data display -->
   <div class="grid">
+
+    <!-- Raw uint16 -->
     <div class="card">
-      <div class="muted">Humidity</div>
-      <div class="big"><span id="hum">--</span> <span class="muted">%</span></div>
-      <div class="muted">Last update: <span id="t">--</span></div>
-      <div class="muted">Points kept: <span id="n">0</span></div>
+
+      <div class="muted">
+        Raw uint16 value
+      </div>
+
+      <div class="big">
+        <span id="rawValue">--</span>
+      </div>
+
+      <div class="muted">
+        Last update:
+        <span id="time">--</span>
+      </div>
+
+      <div class="muted">
+        Points kept:
+        <span id="numPoints">0</span>
+      </div>
+
     </div>
 
-  <div class="card" style="margin-top:12px;">
-    <canvas id="plot"></canvas>
+
+    <!-- Raw bytes -->
+    <div class="card">
+
+      <div class="muted">
+        Raw BLE bytes
+      </div>
+
+      <div class="big" id="rawBytes">
+        --
+      </div>
+
+      <div class="muted">
+        Displayed in hexadecimal
+      </div>
+
+    </div>
+
   </div>
 
+
+  <!-- Plot -->
+  <div
+    class="card"
+    style="margin-top: 12px; max-width: 900px;"
+  >
+
+    <div class="muted" style="margin-bottom: 8px;">
+      Raw uint16 vs. time
+    </div>
+
+    <canvas id="plot"></canvas>
+
+  </div>
+
+
   <script>
-    // ---- UUIDs (standard) ----
-    const ENV_SVC = 0x181A;     // Environmental Sensing
-    const HUM_CHR = 0x2A6F;     // Humidity (uint16, 0.01%RH)
 
-    // ---- UI ----
-    const btnConnect = document.getElementById('btnConnect');
-    const btnDisconnect = document.getElementById('btnDisconnect');
-    const btnClear = document.getElementById('btnClear');
-    const statusEl = document.getElementById('status');
-    const humEl = document.getElementById('hum');
-    const tEl = document.getElementById('t');
-    const nEl = document.getElementById('n');
+    // ============================================================
+    // BLE UUIDs
+    // ============================================================
 
-    // ---- Plot state ----
-    const canvas = document.getElementById('plot');
-    const ctx = canvas.getContext('2d');
+    const ENV_SVC = 0x181A;
+    const HUM_CHR = 0x2A6F;
 
-    // Keep last N seconds of data
-    const KEEP_SECONDS = 300; // 5 minutes
+
+    // ============================================================
+    // UI elements
+    // ============================================================
+
+    const btnConnect =
+      document.getElementById("btnConnect");
+
+    const btnDisconnect =
+      document.getElementById("btnDisconnect");
+
+    const btnClear =
+      document.getElementById("btnClear");
+
+    const statusEl =
+      document.getElementById("status");
+
+    const rawValueEl =
+      document.getElementById("rawValue");
+
+    const rawBytesEl =
+      document.getElementById("rawBytes");
+
+    const timeEl =
+      document.getElementById("time");
+
+    const numPointsEl =
+      document.getElementById("numPoints");
+
+
+    // ============================================================
+    // Plot
+    // ============================================================
+
+    const canvas =
+      document.getElementById("plot");
+
+    const ctx =
+      canvas.getContext("2d");
+
+
+    // Keep last 5 minutes
+    const KEEP_SECONDS = 300;
+
     let t0 = null;
-    let data = []; // {t: seconds, y: humidity}
 
+    // Each item:
+    //
+    // {
+    //   t: time in seconds,
+    //   y: raw uint16 value
+    // }
+    //
+    let data = [];
+
+
+    // ============================================================
     // BLE handles
+    // ============================================================
+
     let device = null;
     let server = null;
     let humChar = null;
 
-    function setStatus(s) { statusEl.textContent = s; }
+
+    // Store notification callback
+    // so that removeEventListener() works correctly.
+    let notificationHandler = null;
+
+
+    // ============================================================
+    // Utility functions
+    // ============================================================
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
 
     function nowStr() {
+
       const d = new Date();
+
       return d.toLocaleTimeString();
+
     }
 
-    // Resize canvas for crisp rendering
+
+    // Convert received bytes to hexadecimal string.
+    //
+    // Example:
+    //
+    // [0x85, 0x13]
+    //
+    // becomes
+    //
+    // "0x85 0x13"
+    //
+    function bytesToHex(dataView) {
+
+      const bytes = new Uint8Array(
+        dataView.buffer,
+        dataView.byteOffset,
+        dataView.byteLength
+      );
+
+      return Array
+        .from(bytes)
+        .map(
+          byte =>
+            "0x" +
+            byte
+              .toString(16)
+              .padStart(2, "0")
+              .toUpperCase()
+        )
+        .join(" ");
+
+    }
+
+
+    // ============================================================
+    // Raw BLE decoding
+    // ============================================================
+
+    function parseRawUint16(dataView) {
+
+      // 0x2A6F payload is read as:
+      //
+      // uint16
+      // little-endian
+      //
+      // IMPORTANT:
+      //
+      // There is NO division by 100 here.
+      //
+      // We are keeping the transmitted raw integer.
+
+      return dataView.getUint16(
+        0,
+        true
+      );
+
+    }
+
+
+    // ============================================================
+    // Canvas handling
+    // ============================================================
+
     function resizeCanvas() {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.floor(rect.width * dpr);
-      canvas.height = Math.floor(rect.height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const dpr =
+        window.devicePixelRatio || 1;
+
+      const rect =
+        canvas.getBoundingClientRect();
+
+      canvas.width =
+        Math.floor(rect.width * dpr);
+
+      canvas.height =
+        Math.floor(rect.height * dpr);
+
+      ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+      );
+
       drawPlot();
+
     }
-    window.addEventListener('resize', resizeCanvas);
 
-    // ---- Simple plotting (no libraries) ----
+
+    window.addEventListener(
+      "resize",
+      resizeCanvas
+    );
+
+
+    // ============================================================
+    // Plot drawing
+    // ============================================================
+
     function drawPlot() {
-      const w = canvas.getBoundingClientRect().width;
-      const h = canvas.getBoundingClientRect().height;
 
-      // background
-      ctx.clearRect(0, 0, w, h);
+      const w =
+        canvas.getBoundingClientRect().width;
 
-      // axes padding
-      const padL = 48, padR = 16, padT = 12, padB = 28;
-      const pw = w - padL - padR;
-      const ph = h - padT - padB;
+      const h =
+        canvas.getBoundingClientRect().height;
 
-      // frame
-      ctx.strokeStyle = '#bbb';
-      ctx.strokeRect(padL, padT, pw, ph);
 
-      // no data
+      // Clear canvas
+      ctx.clearRect(
+        0,
+        0,
+        w,
+        h
+      );
+
+
+      // Plot padding
+      const padL = 65;
+      const padR = 16;
+      const padT = 16;
+      const padB = 30;
+
+      const pw =
+        w - padL - padR;
+
+      const ph =
+        h - padT - padB;
+
+
+      // Frame
+      ctx.strokeStyle = "#bbb";
+      ctx.lineWidth = 1;
+
+      ctx.strokeRect(
+        padL,
+        padT,
+        pw,
+        ph
+      );
+
+
+      // Text settings
+      ctx.fillStyle = "#666";
+
+      ctx.font =
+        "12px system-ui, sans-serif";
+
+
+      // No data yet
       if (data.length < 2) {
-        ctx.fillStyle = '#666';
-        ctx.fillText('Waiting for notifications...', padL + 10, padT + 20);
+
+        ctx.fillText(
+          "Waiting for BLE notifications...",
+          padL + 10,
+          padT + 20
+        );
+
+        return;
+
+      }
+
+
+      // ==========================================================
+      // Time window
+      // ==========================================================
+
+      const tMax =
+        data[data.length - 1].t;
+
+      const tMin =
+        Math.max(
+          0,
+          tMax - KEEP_SECONDS
+        );
+
+
+      // ==========================================================
+      // Determine raw-value range
+      // ==========================================================
+
+      let yMin = Infinity;
+      let yMax = -Infinity;
+
+      for (const point of data) {
+
+        if (point.t < tMin) {
+          continue;
+        }
+
+        yMin =
+          Math.min(
+            yMin,
+            point.y
+          );
+
+        yMax =
+          Math.max(
+            yMax,
+            point.y
+          );
+
+      }
+
+
+      if (
+        !Number.isFinite(yMin) ||
+        !Number.isFinite(yMax)
+      ) {
         return;
       }
 
-      // determine x window: last KEEP_SECONDS
-      const tMax = data[data.length - 1].t;
-      const tMin = Math.max(0, tMax - KEEP_SECONDS);
 
-      // determine y bounds with a little padding
-      let yMin = Infinity, yMax = -Infinity;
-      for (const p of data) {
-        if (p.t < tMin) continue;
-        yMin = Math.min(yMin, p.y);
-        yMax = Math.max(yMax, p.y);
-      }
-      if (!isFinite(yMin) || !isFinite(yMax)) return;
+      // ==========================================================
+      // Add Y-axis padding
+      // ==========================================================
 
-      // pad y range
-      const yPad = Math.max(0.5, (yMax - yMin) * 0.1);
-      yMin -= yPad; yMax += yPad;
-      if (yMax - yMin < 1) { yMin -= 0.5; yMax += 0.5; }
+      let yRange =
+        yMax - yMin;
 
-      // helpers
-      const xToPx = (t) => padL + ((t - tMin) / (tMax - tMin)) * pw;
-      const yToPx = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * ph;
 
-      // y ticks
-      ctx.fillStyle = '#666';
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.font = '12px system-ui, sans-serif';
+      if (yRange === 0) {
 
-      const yTicks = 4;
-      for (let i = 0; i <= yTicks; i++) {
-        const yy = yMin + (i / yTicks) * (yMax - yMin);
-        const py = yToPx(yy);
-        ctx.strokeRect(padL, py, pw, 0); // gridline (0-height rect trick)
-        ctx.fillText(yy.toFixed(1), 6, py + 4);
+        // Prevent zero-height scale
+        yMin -= 1;
+        yMax += 1;
+
+      } else {
+
+        const yPad =
+          Math.max(
+            1,
+            yRange * 0.10
+          );
+
+        yMin -= yPad;
+        yMax += yPad;
+
       }
 
-      // x ticks (seconds ago)
+
+      // ==========================================================
+      // Coordinate conversion
+      // ==========================================================
+
+      const xRange =
+        Math.max(
+          0.001,
+          tMax - tMin
+        );
+
+
+      const xToPx = (t) => {
+
+        return (
+          padL +
+          ((t - tMin) / xRange) * pw
+        );
+
+      };
+
+
+      const yToPx = (y) => {
+
+        return (
+          padT +
+          (
+            1 -
+            (y - yMin) /
+            (yMax - yMin)
+          ) *
+          ph
+        );
+
+      };
+
+
+      // ==========================================================
+      // Y-axis grid
+      // ==========================================================
+
+      const yTicks = 5;
+
+      ctx.strokeStyle = "#e0e0e0";
+      ctx.fillStyle = "#666";
+
+
+      for (
+        let i = 0;
+        i <= yTicks;
+        i++
+      ) {
+
+        const yValue =
+          yMin +
+          (i / yTicks) *
+          (yMax - yMin);
+
+
+        const py =
+          yToPx(yValue);
+
+
+        // Grid line
+        ctx.beginPath();
+
+        ctx.moveTo(
+          padL,
+          py
+        );
+
+        ctx.lineTo(
+          padL + pw,
+          py
+        );
+
+        ctx.stroke();
+
+
+        // Raw integer axis label
+        ctx.fillText(
+          Math.round(yValue).toString(),
+          5,
+          py + 4
+        );
+
+      }
+
+
+      // ==========================================================
+      // X-axis grid
+      // ==========================================================
+
       const xTicks = 5;
-      for (let i = 0; i <= xTicks; i++) {
-        const tt = tMin + (i / xTicks) * (tMax - tMin);
-        const px = xToPx(tt);
-        ctx.strokeRect(px, padT, 0, ph);
-        const ago = Math.round(tMax - tt);
-        ctx.fillText(`${ago}s`, px - 10, padT + ph + 18);
+
+
+      for (
+        let i = 0;
+        i <= xTicks;
+        i++
+      ) {
+
+        const t =
+          tMin +
+          (i / xTicks) *
+          (tMax - tMin);
+
+
+        const px =
+          xToPx(t);
+
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+          px,
+          padT
+        );
+
+        ctx.lineTo(
+          px,
+          padT + ph
+        );
+
+        ctx.stroke();
+
+
+        const secondsAgo =
+          Math.round(
+            tMax - t
+          );
+
+
+        ctx.fillText(
+          `${secondsAgo}s`,
+          px - 10,
+          padT + ph + 20
+        );
+
       }
 
-      // plot line
-      ctx.strokeStyle = '#111';
+
+      // ==========================================================
+      // Plot raw uint16 values
+      // ==========================================================
+
+      ctx.strokeStyle = "#111";
       ctx.lineWidth = 2;
+
       ctx.beginPath();
+
+
       let started = false;
-      for (const p of data) {
-        if (p.t < tMin) continue;
-        const px = xToPx(p.t);
-        const py = yToPx(p.y);
-        if (!started) { ctx.moveTo(px, py); started = true; }
-        else ctx.lineTo(px, py);
+
+
+      for (const point of data) {
+
+        if (point.t < tMin) {
+          continue;
+        }
+
+
+        const px =
+          xToPx(point.t);
+
+        const py =
+          yToPx(point.y);
+
+
+        if (!started) {
+
+          ctx.moveTo(
+            px,
+            py
+          );
+
+          started = true;
+
+        } else {
+
+          ctx.lineTo(
+            px,
+            py
+          );
+
+        }
+
       }
+
+
       ctx.stroke();
 
-      // current point marker
-      const last = data[data.length - 1];
+
+      // ==========================================================
+      // Latest point marker
+      // ==========================================================
+
+      const last =
+        data[data.length - 1];
+
+
       if (last.t >= tMin) {
-        ctx.fillStyle = '#111';
+
+        ctx.fillStyle = "#111";
+
         ctx.beginPath();
-        ctx.arc(xToPx(last.t), yToPx(last.y), 3.5, 0, Math.PI * 2);
+
+        ctx.arc(
+          xToPx(last.t),
+          yToPx(last.y),
+          4,
+          0,
+          Math.PI * 2
+        );
+
         ctx.fill();
+
       }
+
     }
 
-    function pushPoint(y) {
-      if (t0 === null) t0 = performance.now();
-      const t = (performance.now() - t0) / 1000.0;
-      data.push({ t, y });
 
-      // trim old points
-      const cutoff = t - KEEP_SECONDS - 5; // a little buffer
-      while (data.length && data[0].t < cutoff) data.shift();
+    // ============================================================
+    // Add data point
+    // ============================================================
 
-      nEl.textContent = String(data.length);
+    function pushPoint(rawValue) {
+
+      if (t0 === null) {
+
+        t0 =
+          performance.now();
+
+      }
+
+
+      const t =
+        (
+          performance.now() -
+          t0
+        ) / 1000;
+
+
+      data.push({
+
+        t: t,
+
+        y: rawValue
+
+      });
+
+
+      // Trim data older than plot window
+      const cutoff =
+        t -
+        KEEP_SECONDS -
+        5;
+
+
+      while (
+        data.length > 0 &&
+        data[0].t < cutoff
+      ) {
+
+        data.shift();
+
+      }
+
+
+      numPointsEl.textContent =
+        String(data.length);
+
+
       drawPlot();
+
     }
+
+
+    // ============================================================
+    // Process BLE packet
+    // ============================================================
+
+    function processBLEValue(dataView) {
+
+      // Exact received bytes
+      const rawBytes =
+        bytesToHex(dataView);
+
+
+      // uint16 interpretation
+      const rawValue =
+        parseRawUint16(dataView);
+
+
+      // Update UI
+      rawValueEl.textContent =
+        String(rawValue);
+
+      rawBytesEl.textContent =
+        rawBytes;
+
+      timeEl.textContent =
+        nowStr();
+
+
+      // Plot RAW value
+      pushPoint(rawValue);
+
+
+      // Console debugging
+      console.log(
+        "BLE notification:",
+        {
+          time: nowStr(),
+          bytes: rawBytes,
+          uint16: rawValue
+        }
+      );
+
+    }
+
+
+    // ============================================================
+    // Clear plot
+    // ============================================================
 
     function clearPlot() {
+
       data = [];
+
       t0 = null;
-      humEl.textContent = '--';
-      tEl.textContent = '--';
-      nEl.textContent = '0';
+
+
+      rawValueEl.textContent =
+        "--";
+
+      rawBytesEl.textContent =
+        "--";
+
+      timeEl.textContent =
+        "--";
+
+      numPointsEl.textContent =
+        "0";
+
+
       drawPlot();
+
     }
 
-    // ---- BLE decode: uint16 little-endian, units = 0.01%RH ----
-    function parseHumidity(dataView) {
-      // Humidity characteristic 0x2A6F is uint16, 0.01 %RH
-      const raw = dataView.getUint16(0, true); // little-endian
-      return raw / 100.0;
-    }
+
+    // ============================================================
+    // Connect
+    // ============================================================
 
     async function connect() {
+
+      // Check Web Bluetooth
       if (!navigator.bluetooth) {
-        setStatus('Web Bluetooth not available. Use Chrome on Android.');
+
+        setStatus(
+          "Web Bluetooth not available. Use Chrome on Android."
+        );
+
         return;
+
       }
 
-      setStatus('Requesting device...');
-      device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [ENV_SVC] }],
-        optionalServices: [ENV_SVC] // keep explicit
-      });
 
-      device.addEventListener('gattserverdisconnected', onDisconnected);
+      // ==========================================================
+      // Device selection
+      // ==========================================================
 
-      setStatus('Connecting GATT...');
-      server = await device.gatt.connect();
+      setStatus(
+        "Requesting device..."
+      );
 
-      setStatus('Getting Environmental Sensing service...');
-      const service = await server.getPrimaryService(ENV_SVC);
 
-      setStatus('Getting Humidity characteristic...');
-      humChar = await service.getCharacteristic(HUM_CHR);
+      device =
+        await navigator.bluetooth.requestDevice({
 
-      // Optional: read once
+          filters: [
+            {
+              services: [
+                ENV_SVC
+              ]
+            }
+          ],
+
+          optionalServices: [
+            ENV_SVC
+          ]
+
+        });
+
+
+      device.addEventListener(
+        "gattserverdisconnected",
+        onDisconnected
+      );
+
+
+      // ==========================================================
+      // GATT connection
+      // ==========================================================
+
+      setStatus(
+        "Connecting GATT..."
+      );
+
+
+      server =
+        await device.gatt.connect();
+
+
+      // ==========================================================
+      // Service
+      // ==========================================================
+
+      setStatus(
+        "Getting Environmental Sensing service..."
+      );
+
+
+      const service =
+        await server.getPrimaryService(
+          ENV_SVC
+        );
+
+
+      // ==========================================================
+      // Characteristic
+      // ==========================================================
+
+      setStatus(
+        "Getting Humidity characteristic..."
+      );
+
+
+      humChar =
+        await service.getCharacteristic(
+          HUM_CHR
+        );
+
+
+      // ==========================================================
+      // Optional initial read
+      // ==========================================================
+
       try {
-        const v = await humChar.readValue();
-        const h = parseHumidity(v);
-        humEl.textContent = h.toFixed(2);
-        tEl.textContent = nowStr();
-      } catch (e) {
-        // Some stacks might reject read; notify still works.
+
+        const value =
+          await humChar.readValue();
+
+
+        const rawBytes =
+          bytesToHex(value);
+
+
+        const rawValue =
+          parseRawUint16(value);
+
+
+        rawValueEl.textContent =
+          String(rawValue);
+
+        rawBytesEl.textContent =
+          rawBytes;
+
+        timeEl.textContent =
+          nowStr();
+
+
+        console.log(
+          "Initial read:",
+          {
+            bytes: rawBytes,
+            uint16: rawValue
+          }
+        );
+
+      } catch (error) {
+
+        console.warn(
+          "Initial read failed:",
+          error
+        );
+
       }
 
-      setStatus('Starting notifications...');
-      await humChar.startNotifications();
-      humChar.addEventListener('characteristicvaluechanged', (event) => {
-        const dv = event.target.value;
-        const h = parseHumidity(dv);
-        humEl.textContent = h.toFixed(2);
-        tEl.textContent = nowStr();
-        pushPoint(h);
-      });
 
-      btnConnect.disabled = true;
-      btnDisconnect.disabled = false;
-      btnClear.disabled = false;
-      setStatus(`Connected to ${device.name || 'device'}; receiving notifications.`);
+      // ==========================================================
+      // Notifications
+      // ==========================================================
+
+      setStatus(
+        "Starting notifications..."
+      );
+
+
+      await humChar.startNotifications();
+
+
+      notificationHandler =
+        function (event) {
+
+          const dataView =
+            event.target.value;
+
+
+          processBLEValue(
+            dataView
+          );
+
+        };
+
+
+      humChar.addEventListener(
+        "characteristicvaluechanged",
+        notificationHandler
+      );
+
+
+      // ==========================================================
+      // UI state
+      // ==========================================================
+
+      btnConnect.disabled =
+        true;
+
+      btnDisconnect.disabled =
+        false;
+
+      btnClear.disabled =
+        false;
+
+
+      setStatus(
+        `Connected to ${
+          device.name || "device"
+        }; receiving raw notifications.`
+      );
+
     }
+
+
+    // ============================================================
+    // Disconnect handler
+    // ============================================================
 
     function onDisconnected() {
-      setStatus('Disconnected.');
-      btnConnect.disabled = false;
-      btnDisconnect.disabled = true;
-      // keep Clear enabled so you can wipe data without reconnecting
+
+      setStatus(
+        "Disconnected."
+      );
+
+
+      btnConnect.disabled =
+        false;
+
+      btnDisconnect.disabled =
+        true;
+
     }
+
+
+    // ============================================================
+    // Manual disconnect
+    // ============================================================
 
     async function disconnect() {
+
       try {
+
         if (humChar) {
-          try { await humChar.stopNotifications(); } catch (_) {}
-          try { humChar.removeEventListener('characteristicvaluechanged', () => {}); } catch (_) {}
+
+          // Remove notification listener
+          if (notificationHandler) {
+
+            humChar.removeEventListener(
+              "characteristicvaluechanged",
+              notificationHandler
+            );
+
+          }
+
+
+          // Stop notifications
+          try {
+
+            await humChar.stopNotifications();
+
+          } catch (error) {
+
+            console.warn(
+              "Could not stop notifications:",
+              error
+            );
+
+          }
+
         }
-        if (device && device.gatt && device.gatt.connected) {
+
+
+        // Disconnect GATT
+        if (
+          device &&
+          device.gatt &&
+          device.gatt.connected
+        ) {
+
           device.gatt.disconnect();
+
         }
+
       } finally {
-        device = null; server = null; humChar = null;
+
+        device = null;
+        server = null;
+        humChar = null;
+        notificationHandler = null;
+
+
         onDisconnected();
+
       }
+
     }
 
-    // Wire up UI
-    btnConnect.addEventListener('click', async () => {
-      try {
-        await connect();
-      } catch (err) {
-        console.error(err);
-        setStatus(`Failed: ${err.message || err}`);
+
+    // ============================================================
+    // Button handlers
+    // ============================================================
+
+    btnConnect.addEventListener(
+      "click",
+      async () => {
+
+        try {
+
+          await connect();
+
+        } catch (error) {
+
+          console.error(error);
+
+          setStatus(
+            `Failed: ${
+              error.message || error
+            }`
+          );
+
+        }
+
       }
-    });
+    );
 
-    btnDisconnect.addEventListener('click', async () => {
-      await disconnect();
-    });
 
-    btnClear.addEventListener('click', () => {
-      clearPlot();
-    });
+    btnDisconnect.addEventListener(
+      "click",
+      async () => {
 
-    // initial draw
+        await disconnect();
+
+      }
+    );
+
+
+    btnClear.addEventListener(
+      "click",
+      () => {
+
+        clearPlot();
+
+      }
+    );
+
+
+    // ============================================================
+    // Initial canvas
+    // ============================================================
+
     resizeCanvas();
+
   </script>
+
 </body>
+
 </html>
